@@ -1,0 +1,39 @@
+name: Build 3DS
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build 3dsx
+        run: |
+          dkp-pacman -Sy --noconfirm 3ds-dev || true
+          make
+      - name: Build CIA (best effort)
+        continue-on-error: true
+        run: |
+          apt-get update && apt-get install -y curl unzip python3
+          fetch() { curl -s "https://api.github.com/repos/$1/releases/latest" | grep browser_download_url | grep -iE "$2" | head -1 | cut -d'"' -f4; }
+          curl -L "$(fetch 3DSGuy/Project_CTR 'ubuntu.*x86_64\.zip')" -o makerom.zip
+          curl -L "$(fetch carstene1ns/3ds-bannertool 'bannertool.*zip')" -o bannertool.zip
+          unzip -o makerom.zip -d tools; unzip -o bannertool.zip -d tools
+          chmod +x tools/makerom; BT=$(find tools -name bannertool -type f | grep -i linux | head -1); chmod +x "$BT"
+          python3 - <<'PY'
+          import zlib,struct,wave
+          w,h=256,128
+          raw=b"".join(b"\x00"+bytes([30,110,200])*w for _ in range(h))
+          def ch(t,d): c=struct.pack(">I",len(d))+t+d; return c+struct.pack(">I",zlib.crc32(t+d)&0xffffffff)
+          open("banner.png","wb").write(b"\x89PNG\r\n\x1a\n"+ch(b"IHDR",struct.pack(">IIBBBBB",w,h,8,2,0,0,0))+ch(b"IDAT",zlib.compress(raw))+ch(b"IEND",b""))
+          f=wave.open("silence.wav","wb"); f.setnchannels(1); f.setsampwidth(2); f.setframerate(22050); f.writeframes(b"\0\0"*22050); f.close()
+          PY
+          "$BT" makebanner -i banner.png -a silence.wav -o banner.bnr
+          tools/makerom -f cia -o win7_3ds.cia -elf win7_3ds.elf -rsf cia_config.rsf -icon win7_3ds.smdh -banner banner.bnr -DAPP_ROMFS=
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win7_3ds
+          path: |
+            win7_3ds.3dsx
+            win7_3ds.cia
